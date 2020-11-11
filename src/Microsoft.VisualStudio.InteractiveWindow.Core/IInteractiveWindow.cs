@@ -22,7 +22,7 @@ namespace Microsoft.VisualStudio.InteractiveWindow
         /// <summary>
         /// Gets the text view which the interactive window is running and writing output to.
         /// </summary>
-        IWpfTextView TextView
+        ITextView TextView
         {
             get;
         }
@@ -168,7 +168,7 @@ namespace Microsoft.VisualStudio.InteractiveWindow
         /// <remarks>
         /// Flushes all text previously written to the output buffer before the element is inserted.
         /// </remarks>
-        void Write(UIElement element);
+        void Write(object uiElement);
 
         void FlushOutput();
 

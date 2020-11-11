@@ -1,6 +1,7 @@
 ﻿// Copyright (c) Microsoft.  All Rights Reserved.  Licensed under the Apache License, Version 2.0.  See License.txt in the project root for license information.
 
-using System.Windows;
+using System.Collections;
+using System.Collections.Generic;
 
 namespace Microsoft.VisualStudio.InteractiveWindow
 {
@@ -14,8 +15,8 @@ namespace Microsoft.VisualStudio.InteractiveWindow
 
         internal abstract string GetText();
 
-        internal abstract void SetDataObject(object data, bool copy);
+        internal abstract void SetDataObject(IEnumerable<(string format, object value)> data, bool copy);
 
-        internal abstract IDataObject GetDataObject();
+        internal abstract (bool, bool) IsDataTypePresent(string format1, string format2);
     }
 }

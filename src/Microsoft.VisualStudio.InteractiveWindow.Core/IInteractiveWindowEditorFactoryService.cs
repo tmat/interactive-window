@@ -4,6 +4,7 @@ using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Text.Projection;
 using Microsoft.VisualStudio.Utilities;
+using System.Collections.Generic;
 
 namespace Microsoft.VisualStudio.InteractiveWindow
 {
@@ -26,7 +27,7 @@ namespace Microsoft.VisualStudio.InteractiveWindow
         /// <param name="window">The interactive window the text view is being created for.</param>
         /// <param name="buffer">The projection buffer used for displaying the interactive window</param>
         /// <param name="roles">The requested text view roles.</param>
-        IWpfTextView CreateTextView(IInteractiveWindow window, ITextBuffer buffer, ITextViewRoleSet roles);
+        ITextView CreateTextView(IInteractiveWindow window, ITextBuffer buffer, IEnumerable<string> roles);
 
         /// <summary>
         /// Creates a new input buffer for the interactive window.

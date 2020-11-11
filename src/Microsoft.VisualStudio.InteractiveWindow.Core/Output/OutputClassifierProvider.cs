@@ -3,8 +3,6 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.Composition;
-using System.Windows.Media;
-using Microsoft.VisualStudio.Language.StandardClassification;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Classification;
 using Microsoft.VisualStudio.Text.Editor;
@@ -17,8 +15,10 @@ namespace Microsoft.VisualStudio.InteractiveWindow
     /// </summary>
     [Export(typeof(IClassifierProvider))]
     [ContentType(PredefinedInteractiveContentTypes.InteractiveOutputContentTypeName)]
-    internal sealed class OutputClassifierProvider : IClassifierProvider
+    internal sealed partial class OutputClassifierProvider : IClassifierProvider
     {
+        internal const string ErrorOutputFormatDefinitionName = "Interactive Window Error Output";
+
         private static readonly object s_textBufferPropertyKey = new object();
 
         [Import]
@@ -28,7 +28,7 @@ namespace Microsoft.VisualStudio.InteractiveWindow
         {
             return new Classifier(
                 textBuffer,
-                _classificationRegistry.GetClassificationType(FormatDefinitions.ErrorOutput.Name));
+                _classificationRegistry.GetClassificationType(ErrorOutputFormatDefinitionName));
         }
 
         internal static void AttachToBuffer(ITextBuffer buffer, SortedSpans spans)
@@ -78,29 +78,6 @@ namespace Microsoft.VisualStudio.InteractiveWindow
             {
                 add { }
                 remove { }
-            }
-        }
-
-        private static class FormatDefinitions
-        {
-            [Export(typeof(EditorFormatDefinition))]
-            [ClassificationType(ClassificationTypeNames = Name)]
-            [Name(Name)]
-            [UserVisible(true)]
-            internal sealed class ErrorOutput : ClassificationFormatDefinition
-            {
-                public const string Name = "Interactive Window Error Output";
-
-                [Export]
-                [Name(Name)]
-                [BaseDefinition(PredefinedClassificationTypeNames.NaturalLanguage)]
-                internal static readonly ClassificationTypeDefinition Definition = null;
-
-                public ErrorOutput()
-                {
-                    ForegroundColor = Color.FromRgb(0xff, 0, 0);
-                    DisplayName = InteractiveWindowResources.ErrorOutputFormatDefinitionDisplayName;
-                }
             }
         }
     }

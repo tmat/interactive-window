@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
@@ -9,11 +10,7 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Input;
 using System.Windows.Threading;
-using Microsoft.VisualStudio.Language.Intellisense;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Text.Editor.OptionsExtensionMethods;
@@ -32,9 +29,16 @@ namespace Microsoft.VisualStudio.InteractiveWindow
 
             private static readonly object s_suppressPromptInjectionTag = new object();
 
+            private static readonly IEnumerable<string> s_textViewRoles = ImmutableArray.Create(
+                PredefinedTextViewRoles.Analyzable,
+                PredefinedTextViewRoles.Editable,
+                PredefinedTextViewRoles.Interactive,
+                PredefinedTextViewRoles.Zoomable,
+                PredefinedInteractiveTextViewRoles.InteractiveTextViewRole);
+
             private readonly InteractiveWindow _window;
 
-            private readonly IInteractiveWindowEditorFactoryService _factory;
+            private readonly IInteractiveWindowEditorFactoryService _editorFactory;
 
             private readonly ITextBufferFactoryService _textBufferFactoryService;
 
@@ -57,7 +61,6 @@ namespace Microsoft.VisualStudio.InteractiveWindow
             private readonly Queue<PendingSubmission> _pendingSubmissions = new Queue<PendingSubmission>();
 
             private DispatcherTimer _executionTimer;
-            private Cursor _oldCursor;
             private int _currentOutputProjectionSpan;
             private int _outputTrackingCaretPosition = -1;
 
@@ -77,10 +80,11 @@ namespace Microsoft.VisualStudio.InteractiveWindow
             // State captured when we started reading standard input.
             private int _standardInputStart = -1;
 
+#if F
             /// <remarks>Always access through <see cref="SessionStack"/>.</remarks>
             private IIntellisenseSessionStack _sessionStack; // TODO: remove
             private readonly IIntellisenseSessionStackMapService _intellisenseSessionStackMap;
-
+#endif
             private bool _adornmentToMinimize;
 
             private readonly string _lineBreakString;
@@ -89,8 +93,10 @@ namespace Microsoft.VisualStudio.InteractiveWindow
             private readonly IContentType _inertType;
 
             private readonly OutputBuffer _buffer;
+            private readonly ICursorUpdater _cursorUpdater;
 
             private readonly IUIThreadOperationExecutor _waitIndicator;
+            private readonly IInlineAdornmentProvider _adornmentProvider;
 
             public ITextBuffer OutputBuffer { get; }
             public ITextBuffer StandardInputBuffer { get; }
@@ -102,7 +108,7 @@ namespace Microsoft.VisualStudio.InteractiveWindow
             // the language engine and content type of the active submission:
             public readonly IInteractiveEvaluator Evaluator;
 
-            public readonly IWpfTextView TextView;
+            public readonly ITextView TextView;
 
             /// <remarks>Always access through <see cref="EditorOperations"/>.</remarks>
             private IEditorOperations _editorOperations;
@@ -138,26 +144,27 @@ namespace Microsoft.VisualStudio.InteractiveWindow
 
             public UIThreadOnly(
                 InteractiveWindow window,
-                IInteractiveWindowEditorFactoryService factory,
+                IInteractiveWindowEditorFactoryService editorFactory,
                 IContentTypeRegistryService contentTypeRegistry,
                 ITextBufferFactoryService bufferFactory,
                 IProjectionBufferFactoryService projectionBufferFactory,
                 IEditorOperationsFactoryService editorOperationsFactory,
                 ITextBufferUndoManagerProvider textBufferUndoManagerProvider,
-                ITextEditorFactoryService editorFactory,
                 IRtfBuilderService rtfBuilderService,
-                IIntellisenseSessionStackMapService intellisenseSessionStackMap,
                 ISmartIndentationService smartIndenterService,
+                IInlineAdornmentProvider adornmentProvider,
+                ICursorUpdater cursorUpdater,
                 IInteractiveEvaluator evaluator,
                 IUIThreadOperationExecutor waitIndicator)
             {
                 _window = window;
-                _factory = factory;
+                _editorFactory = editorFactory;
                 _textBufferFactoryService = bufferFactory;
                 _textBufferUndoManagerProvider = textBufferUndoManagerProvider;
                 _rtfBuilderService = (IRtfBuilderService2)rtfBuilderService;
-                _intellisenseSessionStackMap = intellisenseSessionStackMap;
                 _smartIndenterService = smartIndenterService;
+                _adornmentProvider = adornmentProvider;
+                _cursorUpdater = cursorUpdater;
                 _waitIndicator = waitIndicator;
                 Evaluator = evaluator;
 
@@ -179,15 +186,8 @@ namespace Microsoft.VisualStudio.InteractiveWindow
 
                 AppendNewOutputProjectionBuffer();
                 _projectionBuffer.Changed += new EventHandler<TextContentChangedEventArgs>(ProjectionBufferChanged);
-
-                var roleSet = editorFactory.CreateTextViewRoleSet(
-                    PredefinedTextViewRoles.Analyzable,
-                    PredefinedTextViewRoles.Editable,
-                    PredefinedTextViewRoles.Interactive,
-                    PredefinedTextViewRoles.Zoomable,
-                    PredefinedInteractiveTextViewRoles.InteractiveTextViewRole);
-
-                TextView = factory.CreateTextView(window, _projectionBuffer, roleSet);
+                
+                TextView = editorFactory.CreateTextView(window, _projectionBuffer, s_textViewRoles);
                 TextView.Caret.PositionChanged += CaretPositionChanged;
 
                 var options = TextView.Options;
@@ -277,7 +277,7 @@ namespace Microsoft.VisualStudio.InteractiveWindow
                 }
 
                 _adornmentToMinimize = false;
-                InlineAdornmentProvider.RemoveAllAdornments(TextView);
+                _adornmentProvider.RemoveAllAdornments(TextView);
 
                 // remove all the spans except our initial span from the projection buffer
                 _uncommittedInput = null;
@@ -876,7 +876,7 @@ namespace Microsoft.VisualStudio.InteractiveWindow
                 }
             }
 
-            #region Editor Helpers
+#region Editor Helpers
 
             private static ITextSnapshotLine GetLastLine(ITextSnapshot snapshot)
             {
@@ -899,7 +899,7 @@ namespace Microsoft.VisualStudio.InteractiveWindow
                 return -1;
             }
 
-            #endregion
+#endregion
 
             private async Task SubmitAsync()
             {
@@ -973,7 +973,7 @@ namespace Microsoft.VisualStudio.InteractiveWindow
                 if (_adornmentToMinimize)
                 {
                     // TODO (tomat): remember the index of the adornment(s) in the current output and minimize those instead of the last one 
-                    InlineAdornmentProvider.MinimizeLastInlineAdornment(TextView);
+                    _adornmentProvider.MinimizeLastInlineAdornment(TextView);
                     _adornmentToMinimize = false;
                 }
 
@@ -1173,6 +1173,7 @@ namespace Microsoft.VisualStudio.InteractiveWindow
 
                     if (languageBuffer == CurrentLanguageBuffer)
                     {
+#if F
                         // TODO (tomat): this should rather send an abstract "finish" command that various features
                         // can implement as needed (IntelliSense, inline rename would commit, etc.).
                         // For now, commit IntelliSense:
@@ -1181,7 +1182,7 @@ namespace Microsoft.VisualStudio.InteractiveWindow
                         {
                             completionSession.Commit();
                         }
-
+#endif
                         await SubmitAsync().ConfigureAwait(true);
                         Debug.Assert(_window.OnUIThread()); // ConfigureAwait should bring us back to the UI thread.
                     }
@@ -1199,6 +1200,7 @@ namespace Microsoft.VisualStudio.InteractiveWindow
                 }
             }
 
+#if F
             private IIntellisenseSessionStack SessionStack
             {
                 get
@@ -1211,7 +1213,7 @@ namespace Microsoft.VisualStudio.InteractiveWindow
                     return _sessionStack;
                 }
             }
-
+#endif
             private static string TrimTrailingEmptyLines(ITextSnapshot snapshot)
             {
                 var line = GetLastLine(snapshot);
@@ -1426,12 +1428,7 @@ namespace Microsoft.VisualStudio.InteractiveWindow
                     _executionTimer.Stop();
                 }
 
-                if (_oldCursor != null)
-                {
-                    ((ContentControl)TextView).Cursor = _oldCursor;
-                }
-
-                _oldCursor = null;
+                _cursorUpdater.ResetCursor(TextView);
                 _executionTimer = null;
             }
 
@@ -1446,21 +1443,10 @@ namespace Microsoft.VisualStudio.InteractiveWindow
 
             private void SetRunningCursor(object sender, EventArgs e)
             {
-                var view = (ContentControl)TextView;
-
-                // Save the old value of the cursor so it can be restored
-                // after execution has finished
-                _oldCursor = view.Cursor;
-
-                // TODO: Design work to come up with the correct cursor to use
-                // Set the repl's cursor to the "executing" cursor
-                view.Cursor = Cursors.Wait;
+                _cursorUpdater.SetWaitCursor(TextView);
 
                 // Stop the timer so it doesn't fire again
-                if (_executionTimer != null)
-                {
-                    _executionTimer.Stop();
-                }
+                _executionTimer?.Stop();
             }
 
             private void RemoveLastInputPrompt()
@@ -1478,7 +1464,7 @@ namespace Microsoft.VisualStudio.InteractiveWindow
             /// </summary>
             private void AddLanguageBuffer()
             {
-                ITextBuffer buffer = _factory.CreateAndActivateBuffer(_window);
+                ITextBuffer buffer = _editorFactory.CreateAndActivateBuffer(_window);
 
                 if (CurrentLanguageBuffer != null)
                 {
@@ -2019,13 +2005,14 @@ namespace Microsoft.VisualStudio.InteractiveWindow
             /// </summary>
             private void SetActiveCode(string text)
             {
+#if F
                 // TODO (tomat): this should be handled by the language intellisense provider, not here:
                 var completionSession = SessionStack.TopSession;
                 if (completionSession != null)
                 {
                     completionSession.Dismiss();
                 }
-
+#endif
                 using (var edit = CurrentLanguageBuffer.CreateEdit(EditOptions.None, reiteratedVersionNumber: null, editTag: null))
                 {
                     edit.Replace(new Span(0, CurrentLanguageBuffer.CurrentSnapshot.Length), text);
@@ -2664,21 +2651,18 @@ namespace Microsoft.VisualStudio.InteractiveWindow
                 string code = Evaluator.FormatClipboard();
                 if (code == null)
                 {
-                    var data = _window.InteractiveWindowClipboard.GetDataObject();
-                    if (data == null)
+                    var clipboard = _window.InteractiveWindowClipboard;
+                    (dataHasLineCutCopyTag, dataHasBoxCutCopyTag) = clipboard.IsDataTypePresent(ClipboardLineBasedCutCopyTag, BoxSelectionCutCopyTag);
+                    
+                    if (!dataHasLineCutCopyTag && !dataHasBoxCutCopyTag)
                     {
                         return false;
                     }
 
-                    dataHasLineCutCopyTag = data.GetDataPresent(ClipboardLineBasedCutCopyTag);
-                    dataHasBoxCutCopyTag = data.GetDataPresent(BoxSelectionCutCopyTag);
-
-                    Debug.Assert((dataHasLineCutCopyTag && dataHasBoxCutCopyTag) == false);
-
-                    if (_window.InteractiveWindowClipboard.ContainsData(InteractiveClipboardFormat.Tag))
+                    if (clipboard.ContainsData(InteractiveClipboardFormat.Tag))
                     {
                         var sb = new StringBuilder();
-                        var blocks = BufferBlock.Deserialize((string)_window.InteractiveWindowClipboard.GetData(InteractiveClipboardFormat.Tag));
+                        var blocks = BufferBlock.Deserialize((string)clipboard.GetData(InteractiveClipboardFormat.Tag));
 
                         foreach (var block in blocks)
                         {
@@ -2699,9 +2683,9 @@ namespace Microsoft.VisualStudio.InteractiveWindow
                         }
                         code = sb.ToString();
                     }
-                    else if (_window.InteractiveWindowClipboard.ContainsText())
+                    else if (clipboard.ContainsText())
                     {
-                        code = _window.InteractiveWindowClipboard.GetText();
+                        code = clipboard.GetText();
                     }
                     else
                     {
@@ -2920,15 +2904,8 @@ namespace Microsoft.VisualStudio.InteractiveWindow
                     return;
                 }
 
-                var data = new DataObject();
-
                 var text = GetText(spans, boxCutCopyTag);
-                data.SetData(DataFormats.Text, text);
-                data.SetData(DataFormats.StringFormat, text);
-                data.SetData(DataFormats.UnicodeText, text);
-
                 var blocks = GetTextBlocks(spans, boxCutCopyTag);
-                data.SetData(InteractiveClipboardFormat.Tag, blocks);
 
                 string rtf = null;
                 try
@@ -2940,23 +2917,8 @@ namespace Microsoft.VisualStudio.InteractiveWindow
                     // Ignore cancellation when doing a copy. The user may not even want RTF text 
                     // so preventing the normal text from being copied would be overkill.
                 }
-                if (rtf != null)
-                {
-                    data.SetData(DataFormats.Rtf, rtf);
-                }
 
-                //tag the data in the clipboard if requested
-                if (lineCutCopyTag)
-                {
-                    data.SetData(ClipboardLineBasedCutCopyTag, true);
-                }
-
-                if (boxCutCopyTag)
-                {
-                    data.SetData(BoxSelectionCutCopyTag, true);
-                }
-
-                _window.InteractiveWindowClipboard.SetDataObject(data, true);
+                _window.InteractiveWindowClipboard.SetDataObject(text, blocks, rtf, lineCutCopyTag, boxCutCopyTag);
             }
 
             private string GenerateRtf(NormalizedSnapshotSpanCollection spans, bool isBoxSelection)
@@ -3420,7 +3382,7 @@ namespace Microsoft.VisualStudio.InteractiveWindow
                 return -1;
             }
 
-            #region Output
+#region Output
 
             /// <summary>Implements <see cref="IInteractiveWindow.Write(string)"/>.</summary>
             public Span Write(string text)
@@ -3456,29 +3418,22 @@ namespace Microsoft.VisualStudio.InteractiveWindow
                 return res;
             }
 
-            /// <summary>Implements <see cref="IInteractiveWindow.Write(UIElement)"/>.</summary>
-            public void Write(UIElement element)
+            /// <summary>Implements <see cref="IInteractiveWindow.Write(object)"/>.</summary>
+            public void Write(object uiElement)
             {
-                if (element == null)
+                if (uiElement == null)
                 {
                     return;
                 }
 
                 _buffer.Flush();
-                InlineAdornmentProvider.AddInlineAdornment(TextView, element, OnAdornmentLoaded);
+                _adornmentProvider.AddInlineAdornment(TextView, uiElement);
                 _adornmentToMinimize = true;
                 WriteLine(string.Empty);
                 WriteLine(string.Empty);
             }
 
-            private void OnAdornmentLoaded(object source, EventArgs e)
-            {
-                // Make sure the caret line is rendered
-                DoEvents();
-                TextView.Caret.EnsureVisible();
-            }
-
-            #endregion
+#endregion
 
             void IDisposable.Dispose()
             {

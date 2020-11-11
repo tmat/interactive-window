@@ -42,6 +42,11 @@
     <PackageReference Include="Microsoft.VisualStudio.SDK.Analyzers" Version="$(MicrosoftVisualStudioSDKAnalyzersVersion)" PrivateAssets="all" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Microsoft.VisualStudio.InteractiveWindow.Core\Microsoft.VisualStudio.InteractiveWindow.Core.csproj">
+      <!-- Name of the dependency used in vsixmanifest -->
+      <Name>InteractiveWindow.Core</Name>
+      <IncludeOutputGroupsInVSIX>BuiltProjectOutputGroup;SatelliteDllsProjectOutputGroup</IncludeOutputGroupsInVSIX>
+    </ProjectReference>
     <ProjectReference Include="..\Microsoft.VisualStudio.InteractiveWindow\Microsoft.VisualStudio.InteractiveWindow.csproj">
       <!-- Name of the dependency used in vsixmanifest -->
       <Name>InteractiveWindow</Name>
@@ -49,10 +54,10 @@
     </ProjectReference>
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="..\Microsoft.VisualStudio.InteractiveWindow\InternalUtilities\ExceptionUtilities.cs">
+    <Compile Include="..\Microsoft.VisualStudio.InteractiveWindow.Core\InternalUtilities\ExceptionUtilities.cs">
       <Link>InternalUtilities\ExceptionUtilities.cs</Link>
     </Compile>
-    <Compile Include="..\Microsoft.VisualStudio.InteractiveWindow\InternalUtilities\FatalError.cs">
+    <Compile Include="..\Microsoft.VisualStudio.InteractiveWindow.Core\InternalUtilities\FatalError.cs">
       <Link>InternalUtilities\FatalError.cs</Link>
     </Compile>
     <None Include="source.extension.vsixmanifest">

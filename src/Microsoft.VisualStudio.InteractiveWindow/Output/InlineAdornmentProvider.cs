@@ -1,151 +1,50 @@
 ﻿// Copyright (c) Microsoft.  All Rights Reserved.  Licensed under the Apache License, Version 2.0.  See License.txt in the project root for license information.
 
-using System;
-using System.Collections.Generic;
-using System.ComponentModel.Composition;
-using System.Windows;
-using System.Windows.Threading;
-using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
-using Microsoft.VisualStudio.Text.Tagging;
-using Microsoft.VisualStudio.Utilities;
+using System;
+using System.Windows.Threading;
 
 namespace Microsoft.VisualStudio.InteractiveWindow
 {
-    [Export(typeof(IViewTaggerProvider))]
-    [TagType(typeof(IntraTextAdornmentTag))]
-    [ContentType(PredefinedInteractiveContentTypes.InteractiveContentTypeName)]
-    internal sealed class InlineAdornmentProvider : IViewTaggerProvider
+    internal sealed class InlineAdornmentProvider : IInlineAdornmentProvider
     {
-        public ITagger<T> CreateTagger<T>(ITextView textView, ITextBuffer buffer) where T : ITag
+        public void AddInlineAdornment(ITextView view, object uiElement)
         {
-            if (buffer == null || textView == null || typeof(T) != typeof(IntraTextAdornmentTag))
-            {
-                return null;
-            }
-
-            return (ITagger<T>)textView.Properties.GetOrCreateSingletonProperty<InlineReplAdornmentManager>(
-                typeof(InlineReplAdornmentManager),
-                () => new InlineReplAdornmentManager(textView));
+            // UIElement uiElement, RoutedEventHandler onLoaded
         }
 
-        private class InlineReplAdornmentManager : ITagger<IntraTextAdornmentTag>
+        private void OnAdornmentLoaded(object source, EventArgs e)
         {
-            private readonly ITextView _textView;
-            private readonly List<Tuple<int, ZoomableInlineAdornment>> _tags;
-            private readonly Dispatcher _dispatcher;
-
-            internal InlineReplAdornmentManager(ITextView textView)
-            {
-                _textView = textView;
-                _tags = new List<Tuple<int, ZoomableInlineAdornment>>();
-                _dispatcher = Dispatcher.CurrentDispatcher;
-            }
-
-            public IEnumerable<ITagSpan<IntraTextAdornmentTag>> GetTags(NormalizedSnapshotSpanCollection spans)
-            {
-                var result = new List<TagSpan<IntraTextAdornmentTag>>();
-                foreach (var t in _tags)
-                {
-                    var span = new SnapshotSpan(_textView.TextSnapshot, t.Item1, 0);
-                    t.Item2.UpdateSize();
-                    var tag = new IntraTextAdornmentTag(t.Item2, null);
-                    result.Add(new TagSpan<IntraTextAdornmentTag>(span, tag));
-                }
-
-                return result;
-            }
-
-            public void AddAdornment(ZoomableInlineAdornment uiElement)
-            {
-                if (Dispatcher.CurrentDispatcher != _dispatcher)
-                {
-#pragma warning disable VSTHRD001 // Avoid legacy thread switching APIs
-                    _ = _dispatcher.BeginInvoke(new Action(() => AddAdornment(uiElement)));
-#pragma warning restore
-                    return;
-                }
-
-                var caretPos = _textView.Caret.Position.BufferPosition;
-                var caretLine = caretPos.GetContainingLine();
-                _tags.Add(new Tuple<int, ZoomableInlineAdornment>(caretPos.Position, uiElement));
-
-                var handler = TagsChanged;
-                if (handler != null)
-                {
-                    var span = new SnapshotSpan(_textView.TextSnapshot, caretLine.Start, caretLine.Length);
-                    var args = new SnapshotSpanEventArgs(span);
-                    handler(this, args);
-                }
-            }
-
-            public IList<Tuple<int, ZoomableInlineAdornment>> Adornments
-            {
-                get { return _tags; }
-            }
-
-            public void RemoveAll()
-            {
-                _tags.Clear();
-            }
-
-            public event EventHandler<SnapshotSpanEventArgs> TagsChanged;
+            // Make sure the caret line is rendered
+            DoEvents();
+            TextView.Caret.EnsureVisible();
         }
 
-        private static InlineReplAdornmentManager GetManager(ITextView view)
+        private static void DoEvents()
         {
-            InlineReplAdornmentManager result;
-            if (!view.Properties.TryGetProperty<InlineReplAdornmentManager>(typeof(InlineReplAdornmentManager), out result))
-            {
-                return null;
-            }
+            var frame = new DispatcherFrame();
 
-            return result;
+            _ = Dispatcher.CurrentDispatcher.BeginInvoke(
+                DispatcherPriority.Background,
+                new Action<DispatcherFrame>(f => f.Continue = false),
+                frame);
+
+            Dispatcher.PushFrame(frame);
         }
 
-        public static void AddInlineAdornment(ITextView view, UIElement uiElement, RoutedEventHandler onLoaded)
+        public void MinimizeLastInlineAdornment(ITextView view)
         {
-            var manager = GetManager(view);
-            if (manager != null)
-            {
-                var adornment = new ZoomableInlineAdornment(uiElement, view);
-
-                // Original Python code unhooked this event after load was complete
-                // I don't think this should be needed... we'll see.
-                adornment.Loaded += onLoaded;
-                manager.AddAdornment(adornment);
-            }
+            throw new System.NotImplementedException();
         }
 
-        public static void ZoomInlineAdornments(ITextView view, double zoomFactor)
+        public void RemoveAllAdornments(ITextView view)
         {
-            var manager = GetManager(view);
-            if (manager != null)
-            {
-                foreach (var t in manager.Adornments)
-                {
-                    t.Item2.Zoom(zoomFactor);
-                }
-            }
+            throw new System.NotImplementedException();
         }
 
-        public static void MinimizeLastInlineAdornment(ITextView view)
+        public void ZoomInlineAdornments(ITextView view, double zoomFactor)
         {
-            var manager = GetManager(view);
-            if (manager != null && manager.Adornments.Count > 0)
-            {
-                var adornment = manager.Adornments[manager.Adornments.Count - 1].Item2;
-                adornment.Zoom(adornment.MinimizedZoom);
-            }
-        }
-
-        public static void RemoveAllAdornments(ITextView view)
-        {
-            var manager = GetManager(view);
-            if (manager != null)
-            {
-                manager.RemoveAll();
-            }
+            throw new System.NotImplementedException();
         }
     }
 }

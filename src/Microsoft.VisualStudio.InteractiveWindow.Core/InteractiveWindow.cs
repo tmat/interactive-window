@@ -10,9 +10,6 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Windows;
-using System.Windows.Threading;
-using Microsoft.VisualStudio.Language.Intellisense;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Text.Formatting;
@@ -55,46 +52,51 @@ namespace Microsoft.VisualStudio.InteractiveWindow
         /// WARNING: Members of this object should only be accessed from the UI thread.
         /// </remarks>
         private readonly UIThreadOnly _uiOnly;
+        private readonly IMainThreadDispatcher _dispatcher;
 
         // Setter for InteractiveWindowClipboard is a test hook.  
-        internal InteractiveWindowClipboard InteractiveWindowClipboard { get; set; } = new SystemClipboard();
+        internal InteractiveWindowClipboard InteractiveWindowClipboard { get; }
 
         #region Initialization
 
         public InteractiveWindow(
-            IInteractiveWindowEditorFactoryService host,
+            IInteractiveWindowEditorFactoryService editorFactory,
             IContentTypeRegistryService contentTypeRegistry,
             ITextBufferFactoryService bufferFactory,
             IProjectionBufferFactoryService projectionBufferFactory,
             IEditorOperationsFactoryService editorOperationsFactory,
             ITextBufferUndoManagerProvider textBufferUndoManagerProvider,
-            ITextEditorFactoryService editorFactory,
             IRtfBuilderService rtfBuilderService,
-            IIntellisenseSessionStackMapService intellisenseSessionStackMap,
             ISmartIndentationService smartIndenterService,
+            IInlineAdornmentProvider adornmentProvider,
+            ICursorUpdater cursorUpdater,
+            InteractiveWindowClipboard clipboard,
             IInteractiveEvaluator evaluator,
+            IMainThreadDispatcher dispatcher,
             IUIThreadOperationExecutor waitIndicator)
         {
             if (evaluator == null)
             {
                 throw new ArgumentNullException(nameof(evaluator));
             }
-
+            
+            _dispatcher = dispatcher;
             _uiOnly = new UIThreadOnly(
                 this,
-                host,
+                editorFactory,
                 contentTypeRegistry,
                 bufferFactory,
                 projectionBufferFactory,
                 editorOperationsFactory,
                 textBufferUndoManagerProvider,
-                editorFactory,
                 rtfBuilderService,
-                intellisenseSessionStackMap,
                 smartIndenterService,
+                adornmentProvider,
+                cursorUpdater,
                 evaluator,
                 waitIndicator);
 
+            InteractiveWindowClipboard = clipboard;
             evaluator.CurrentWindow = this;
 
             RequiresUIThread();
@@ -116,7 +118,7 @@ namespace Microsoft.VisualStudio.InteractiveWindow
 
                 // Anything that reads options should wait until after this call so the evaluator can set the options first
                 ExecutionResult result = await uiOnly.Evaluator.InitializeAsync().ConfigureAwait(continueOnCapturedContext: true);
-                Debug.Assert(OnUIThread()); // ConfigureAwait should bring us back to the UI thread.
+                Debug.Assert(_dispatcher.IsExecutingOnMainThread); // ConfigureAwait should bring us back to the UI thread.
 
                 if (result.IsSuccessful)
                 {
@@ -144,7 +146,7 @@ namespace Microsoft.VisualStudio.InteractiveWindow
 
         void IInteractiveWindow.Close()
         {
-            UIThread(uiOnly => uiOnly.Close());
+            _dispatcher.ExecuteOnMainThread(() => _uiOnly.Close());
         }
 
         #region Misc Helpers
@@ -156,7 +158,7 @@ namespace Microsoft.VisualStudio.InteractiveWindow
 
         void IDisposable.Dispose()
         {
-            UIThread(uiOnly => ((IDisposable)uiOnly).Dispose());
+            _dispatcher.ExecuteOnMainThread(() => ((IDisposable)_uiOnly).Dispose());
         }
 
         public static InteractiveWindow FromBuffer(ITextBuffer buffer)
@@ -175,7 +177,7 @@ namespace Microsoft.VisualStudio.InteractiveWindow
         /// <remarks>
         /// The caller is responsible for using the text view in a thread-safe manner.
         /// </remarks>
-        IWpfTextView IInteractiveWindow.TextView => _uiOnly.TextView;
+        ITextView IInteractiveWindow.TextView => _uiOnly.TextView;
 
         /// <remarks>
         /// The caller is responsible for using the buffer in a thread-safe manner.
@@ -220,7 +222,7 @@ namespace Microsoft.VisualStudio.InteractiveWindow
                 }
             }
 
-            UIThread(uiOnly => uiOnly.Submit(pendingSubmissions));
+            _dispatcher.ExecuteOnMainThread(() => _uiOnly.Submit(pendingSubmissions));
 
             // This indicates that the last submission has completed.
             await completion.Task.ConfigureAwait(false);
@@ -234,22 +236,22 @@ namespace Microsoft.VisualStudio.InteractiveWindow
 
         void IInteractiveWindow.AddInput(string command)
         {
-            UIThread(uiOnly => uiOnly.AddInput(command));
+            _dispatcher.ExecuteOnMainThread(() => _uiOnly.AddInput(command));
         }
 
         void IInteractiveWindow2.AddToHistory(string input)
         {
-            UIThread(uiOnly => uiOnly.AddToHistory(input));
+            _dispatcher.ExecuteOnMainThread(() => _uiOnly.AddToHistory(input));
         }
 
         void IInteractiveWindow.FlushOutput()
         {
-            UIThread(uiOnly => uiOnly.FlushOutput());
+            _dispatcher.ExecuteOnMainThread(() => _uiOnly.FlushOutput());
         }
 
         void IInteractiveWindow.InsertCode(string text)
         {
-            UIThread(uiOnly => uiOnly.InsertCode(text));
+            _dispatcher.ExecuteOnMainThread(() => _uiOnly.InsertCode(text));
         }
 
         #endregion
@@ -258,17 +260,17 @@ namespace Microsoft.VisualStudio.InteractiveWindow
 
         Task<ExecutionResult> IInteractiveWindowOperations.ResetAsync(bool initialize)
         {
-            return UIThread(uiOnly => uiOnly.ResetAsync(initialize));
+            return _dispatcher.ExecuteOnMainThread(() => _uiOnly.ResetAsync(initialize));
         }
 
         void IInteractiveWindowOperations.ClearHistory()
         {
-            UIThread(uiOnly => uiOnly.ClearHistory());
+            _dispatcher.ExecuteOnMainThread(() => _uiOnly.ClearHistory());
         }
 
         void IInteractiveWindowOperations.ClearView()
         {
-            UIThread(uiOnly => uiOnly.ClearView());
+            _dispatcher.ExecuteOnMainThread(() => _uiOnly.ClearView());
         }
 
         /// <summary>
@@ -276,12 +278,12 @@ namespace Microsoft.VisualStudio.InteractiveWindow
         /// </summary>
         bool IInteractiveWindowOperations.Paste()
         {
-            return UIThread(uiOnly => uiOnly.Paste());
+            return _dispatcher.ExecuteOnMainThread(() => _uiOnly.Paste());
         }
 
         void IInteractiveWindowOperations.ExecuteInput()
         {
-            _ = UIThread(uiOnly => uiOnly.ExecuteInputAsync());
+            _ = _dispatcher.ExecuteOnMainThread(() => _uiOnly.ExecuteInputAsync());
         }
 
         /// <remarks>
@@ -289,7 +291,7 @@ namespace Microsoft.VisualStudio.InteractiveWindow
         /// </remarks>
         internal Task ExecuteInputAsync()
         {
-            return UIThread(uiOnly => uiOnly.ExecuteInputAsync());
+            return _dispatcher.ExecuteOnMainThread(() => _uiOnly.ExecuteInputAsync());
         }
 
         /// <summary>
@@ -308,27 +310,27 @@ namespace Microsoft.VisualStudio.InteractiveWindow
         /// </summary>
         void IInteractiveWindowOperations.Cancel()
         {
-            UIThread(uiOnly => uiOnly.Cancel());
+            _dispatcher.ExecuteOnMainThread(() => _uiOnly.Cancel());
         }
 
         void IInteractiveWindowOperations.HistoryPrevious(string search)
         {
-            UIThread(uiOnly => uiOnly.HistoryPrevious(search));
+            _dispatcher.ExecuteOnMainThread(() => _uiOnly.HistoryPrevious(search));
         }
 
         void IInteractiveWindowOperations.HistoryNext(string search)
         {
-            UIThread(uiOnly => uiOnly.HistoryNext(search));
+            _dispatcher.ExecuteOnMainThread(() => _uiOnly.HistoryNext(search));
         }
 
         void IInteractiveWindowOperations.HistorySearchNext()
         {
-            UIThread(uiOnly => uiOnly.HistorySearchNext());
+            _dispatcher.ExecuteOnMainThread(() => _uiOnly.HistorySearchNext());
         }
 
         void IInteractiveWindowOperations.HistorySearchPrevious()
         {
-            UIThread(uiOnly => uiOnly.HistorySearchPrevious());
+            _dispatcher.ExecuteOnMainThread(() => _uiOnly.HistorySearchPrevious());
         }
 
         /// <summary>
@@ -336,7 +338,7 @@ namespace Microsoft.VisualStudio.InteractiveWindow
         /// </summary>
         void IInteractiveWindowOperations.Home(bool extendSelection)
         {
-            UIThread(uiOnly => uiOnly.Home(extendSelection));
+            _dispatcher.ExecuteOnMainThread(() => _uiOnly.Home(extendSelection));
         }
 
         /// <summary>
@@ -344,12 +346,12 @@ namespace Microsoft.VisualStudio.InteractiveWindow
         /// </summary>
         void IInteractiveWindowOperations.End(bool extendSelection)
         {
-            UIThread(uiOnly => uiOnly.End(extendSelection));
+            _dispatcher.ExecuteOnMainThread(() => _uiOnly.End(extendSelection));
         }
 
         void IInteractiveWindowOperations.SelectAll()
         {
-            UIThread(uiOnly => uiOnly.SelectAll());
+            _dispatcher.ExecuteOnMainThread(() => _uiOnly.SelectAll());
         }
 
         #endregion
@@ -369,57 +371,57 @@ namespace Microsoft.VisualStudio.InteractiveWindow
 
         bool IInteractiveWindowOperations.Delete()
         {
-            return UIThread(uiOnly => uiOnly.Delete());
+            return _dispatcher.ExecuteOnMainThread(() => _uiOnly.Delete());
         }
 
         void IInteractiveWindowOperations.Cut()
         {
-            UIThread(uiOnly => uiOnly.Cut());
+            _dispatcher.ExecuteOnMainThread(() => _uiOnly.Cut());
         }
 
         void IInteractiveWindowOperations2.Copy()
         {
-            UIThread(uiOnly => uiOnly.Copy());
+            _dispatcher.ExecuteOnMainThread(() => _uiOnly.Copy());
         }
 
         void IInteractiveWindowOperations2.CopyCode()
         {
-            UIThread(uiOnly => uiOnly.CopyCode());
+            _dispatcher.ExecuteOnMainThread(() => _uiOnly.CopyCode());
         }
 
         bool IInteractiveWindowOperations.Backspace()
         {
-            return UIThread(uiOnly => uiOnly.Backspace());
+            return _dispatcher.ExecuteOnMainThread(() => _uiOnly.Backspace());
         }
 
         bool IInteractiveWindowOperations.TrySubmitStandardInput()
         {
-            return UIThread(uiOnly => uiOnly.TrySubmitStandardInput());
+            return _dispatcher.ExecuteOnMainThread(() => _uiOnly.TrySubmitStandardInput());
         }
 
         bool IInteractiveWindowOperations.BreakLine()
         {
-            return UIThread(uiOnly => uiOnly.BreakLine());
+            return _dispatcher.ExecuteOnMainThread(() => _uiOnly.BreakLine());
         }
 
         bool IInteractiveWindowOperations.Return()
         {
-            return UIThread(uiOnly => uiOnly.Return());
+            return _dispatcher.ExecuteOnMainThread(() => _uiOnly.Return());
         }
 
         void IInteractiveWindowOperations2.DeleteLine()
         {
-            UIThread(uiOnly => uiOnly.DeleteLine());
+            _dispatcher.ExecuteOnMainThread(() => _uiOnly.DeleteLine());
         }
 
         void IInteractiveWindowOperations2.CutLine()
         {
-            UIThread(uiOnly => uiOnly.CutLine());
+            _dispatcher.ExecuteOnMainThread(() => _uiOnly.CutLine());
         }
 
         void IInteractiveWindowOperations2.TypeChar(char typedChar)
         {
-            UIThread(uiOnly => uiOnly.TypeChar(typedChar));
+            _dispatcher.ExecuteOnMainThread(() => _uiOnly.TypeChar(typedChar));
         }
 
         #endregion
@@ -478,7 +480,7 @@ namespace Microsoft.VisualStudio.InteractiveWindow
                 await _inputReaderSemaphore.WaitAsync().ConfigureAwait(true); // Only one thread can read from standard input at a time.
                 try
                 {
-                    return await UIThread(uiOnly => uiOnly.ReadStandardInputAsync()).ConfigureAwait(true);
+                    return await _dispatcher.ExecuteOnMainThread(() => _uiOnly.ReadStandardInputAsync()).ConfigureAwait(true);
                 }
                 finally
                 {
@@ -497,68 +499,36 @@ namespace Microsoft.VisualStudio.InteractiveWindow
 
         Span IInteractiveWindow.Write(string text)
         {
-            return UIThread(uiOnly => uiOnly.Write(text));
+            return _dispatcher.ExecuteOnMainThread(() => _uiOnly.Write(text));
         }
 
         Span IInteractiveWindow.WriteLine(string text)
         {
-            return UIThread(uiOnly => uiOnly.WriteLine(text));
+            return _dispatcher.ExecuteOnMainThread(() => _uiOnly.WriteLine(text));
         }
 
         Span IInteractiveWindow.WriteError(string text)
         {
-            return UIThread(uiOnly => uiOnly.WriteError(text));
+            return _dispatcher.ExecuteOnMainThread(() => _uiOnly.WriteError(text));
         }
 
         Span IInteractiveWindow.WriteErrorLine(string text)
         {
-            return UIThread(uiOnly => uiOnly.WriteErrorLine(text));
+            return _dispatcher.ExecuteOnMainThread(() => _uiOnly.WriteErrorLine(text));
         }
 
-        void IInteractiveWindow.Write(UIElement element)
+        void IInteractiveWindow.Write(object uiElement)
         {
-            UIThread(uiOnly => uiOnly.Write(element));
+            _dispatcher.ExecuteOnMainThread(() => _uiOnly.Write(uiElement));
         }
 
         #endregion
 
         #region UI Dispatcher Helpers
 
-        private Dispatcher Dispatcher => ((FrameworkElement)_uiOnly.TextView).Dispatcher; // Always safe to access the dispatcher.
-
-        internal bool OnUIThread()
-        {
-            return Dispatcher.CheckAccess();
-        }
-
-        private T UIThread<T>(Func<UIThreadOnly, T> func)
-        {
-            if (!OnUIThread())
-            {
-#pragma warning disable VSTHRD001 // Avoid legacy thread switching APIs
-                return (T)Dispatcher.Invoke(func, _uiOnly); // Safe because of dispatch.
-#pragma warning restore
-            }
-
-            return func(_uiOnly); // Safe because of check.
-        }
-
-        private void UIThread(Action<UIThreadOnly> action)
-        {
-            if (!OnUIThread())
-            {
-#pragma warning disable VSTHRD001 // Avoid legacy thread switching APIs
-                Dispatcher.Invoke(action, _uiOnly); // Safe because of dispatch.
-#pragma warning restore
-                return;
-            }
-
-            action(_uiOnly); // Safe because of check.
-        }
-
         private void RequiresUIThread()
         {
-            if (!OnUIThread())
+            if (!_dispatcher.IsExecutingOnMainThread)
             {
                 throw new InvalidOperationException(InteractiveWindowResources.RequireUIThread);
             }
@@ -566,24 +536,10 @@ namespace Microsoft.VisualStudio.InteractiveWindow
 
         private void RequiresNonUIThread()
         {
-            if (OnUIThread())
+            if (_dispatcher.IsExecutingOnMainThread)
             {
                 throw new InvalidOperationException(InteractiveWindowResources.RequireNonUIThread);
             }
-        }
-
-        private static void DoEvents()
-        {
-            var frame = new DispatcherFrame();
-
-#pragma warning disable VSTHRD001 // Avoid legacy thread switching APIs
-            _ = Dispatcher.CurrentDispatcher.BeginInvoke(
-                DispatcherPriority.Background,
-                new Action<DispatcherFrame>(f => f.Continue = false),
-                frame);
-#pragma warning restore
-
-            Dispatcher.PushFrame(frame);
         }
 
         #endregion
@@ -594,12 +550,12 @@ namespace Microsoft.VisualStudio.InteractiveWindow
 
         internal void Undo_TestOnly(int count)
         {
-            UIThread(uiOnly => uiOnly.UndoHistory?.Undo(count));
+            _dispatcher.ExecuteOnMainThread(() => _uiOnly.UndoHistory?.Undo(count));
         }
 
         internal void Redo_TestOnly(int count)
         {
-            UIThread(uiOnly => uiOnly.UndoHistory?.Redo(count));
+            _dispatcher.ExecuteOnMainThread(() => _uiOnly.UndoHistory?.Redo(count));
         }
 
         #endregion
